@@ -15,6 +15,7 @@ env/
 
 # Export output
 export/
+export.zip
 upload/
 
 # Secrets / config (contains credentials)
