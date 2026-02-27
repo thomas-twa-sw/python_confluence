@@ -15,6 +15,7 @@ env/
 
 # Export output
 export/
+upload/
 
 # Secrets / config (contains credentials)
 config.py
