@@ -14,7 +14,7 @@ import sys
 
 from bs4 import BeautifulSoup
 
-from config import EXPORT_DIR
+from config import EXPORT_DIR, MAX_FILE_SIZE_BYTES
 
 UPLOAD_DIR = os.path.join("upload", "txt")
 
@@ -89,25 +89,65 @@ def collect_sections(export_dir: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def merge_section(section_name: str, html_files: list, output_dir: str):
-    """Convert and merge all pages in a section into one .txt file."""
-    os.makedirs(output_dir, exist_ok=True)
-    out_path = os.path.join(output_dir, section_name + ".txt")
+    """Convert and merge all pages in a section into one or more .txt files.
 
-    parts = []
+    Files are split at page boundaries when MAX_FILE_SIZE_BYTES would be exceeded.
+    Parts are named <section>.txt, <section>_part2.txt, <section>_part3.txt, …
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    def _out_path(part: int) -> str:
+        suffix = "" if part == 1 else f"_part{part}"
+        return os.path.join(output_dir, f"{section_name}{suffix}.txt")
+
+    part = 1
+    current_parts = []
+    current_size = 0
+    files_written = 0
+
+    def _flush(parts: list, p: int, page_count: int):
+        content = "\n\n".join(parts)
+        path = _out_path(p)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        logging.info("Written: %s (%d pages, %d bytes)", path, page_count, len(content.encode("utf-8")))
+
+    page_count = 0
     for page_title, html_path in html_files:
         try:
             with open(html_path, "r", encoding="utf-8") as f:
                 html = f.read()
             text = html_to_text(html)
-            parts.append(f"=== Page: {page_title} ===\n\n{text}")
             logging.debug("Converted: %s", html_path)
         except Exception as exc:
             logging.warning("Failed to convert %s — %s", html_path, exc)
+            continue
 
-    content = "\n\n".join(parts)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    logging.info("Written: %s (%d pages, %d chars)", out_path, len(html_files), len(content))
+        entry = f"=== Page: {page_title} ===\n\n{text}"
+        entry_size = len(entry.encode("utf-8"))
+        separator_size = len("\n\n".encode("utf-8")) if current_parts else 0
+
+        if current_parts and (current_size + separator_size + entry_size) > MAX_FILE_SIZE_BYTES:
+            _flush(current_parts, part, page_count)
+            files_written += 1
+            part += 1
+            current_parts = []
+            current_size = 0
+            page_count = 0
+
+        if not current_parts and entry_size > MAX_FILE_SIZE_BYTES:
+            logging.warning("Page '%s' exceeds MAX_FILE_SIZE_BYTES (%d bytes) — written alone", page_title, entry_size)
+
+        current_parts.append(entry)
+        current_size += entry_size + separator_size
+        page_count += 1
+
+    if current_parts:
+        _flush(current_parts, part, page_count)
+        files_written += 1
+
+    if files_written > 1:
+        logging.info("Section '%s' split into %d files.", section_name, files_written)
 
 # ---------------------------------------------------------------------------
 # Main
